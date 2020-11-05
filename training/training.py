@@ -51,6 +51,7 @@ arguments = [
     ['namespace', 'debug', [
         [bool, 'write_graph', False, ''],
         [bool, 'write_histogram', False, ''],
+        [bool, 'log_gradients', False, 'whether to visualize the histogram, distibution and norm of gradients'],
     ]]
 ]
 
@@ -91,6 +92,41 @@ def define_model_in_strategy(args, get_model):
   else:
     model, optimizer = get_model(args)
   return model, optimizer
+
+class GradientCallback(tf.keras.callbacks.Callback):
+  def __init__(self, batch, log_dir, log_freq=0):
+    """ 
+    Args:
+      log_dir (str): the path of the directory where to save the log files to be parsed by TensorBoard.
+      batch (tuple): batch of image and label pair, gradient will be calculated on this
+      log_freq (int): frequency (in epochs) at which to visualize the gradients. If set to 0, gradients won't be vizualized
+    """
+    self.log_freq = log_freq
+    self.batch = batch
+    self.grad_writer = tf.summary.create_file_writer(os.path.join(log_dir, 'grads')) 
+        
+  def _log_gradients(self, epoch):
+    """Logs the gradients of the Model."""
+    x, y = self.batch
+    x = tf.convert_to_tensor(x)
+    y = tf.convert_to_tensor(y)
+    trainable_vars = self.model.trainable_variables
+    with tf.GradientTape() as tape:
+      y_pred = self.model(x, training=True)
+      loss = self.model.compiled_loss(y, y_pred, regularization_losses=self.model.losses)
+    gradients = tape.gradient(loss, trainable_vars)
+    with self.grad_writer.as_default():
+      for weights, grads in zip(trainable_vars, gradients):
+        # keeping only the kernels and biases
+        if 'kernel' in weights.name or 'bias' in weights.name:
+          grad_name = weights.name.replace(':', '_') + '_grad'
+          g_norm = tf.norm(grads, ord='euclidean')
+          tf.summary.histogram(grad_name+'_hist', grads, epoch)
+          tf.summary.scalar(grad_name+'_norm', g_norm, epoch)
+                    
+  def on_epoch_end(self, epoch, logs=None):
+    if self.log_freq and epoch % self.log_freq == 0:
+      self._log_gradients(epoch)
 
 
 def get_callbacks(args, log_dir):

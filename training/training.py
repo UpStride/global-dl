@@ -117,13 +117,17 @@ class GradientCallback(tf.keras.callbacks.Callback):
     gradients = tape.gradient(loss, trainable_vars)
     with self.grad_writer.as_default():
       for weights, grads in zip(trainable_vars, gradients):
-        # keeping only the kernels and biases
+        # keeping only the grads for kernels and biases
         if 'kernel' in weights.name or 'bias' in weights.name:
-          grad_name = weights.name.replace(':', '_') + '_grad'
+          grad_name = weights.name.replace(':', '_')
+          if 'kernel' in weights.name:
+            grad_name = 'kernel_grad/' + grad_name
+          if 'bias' in weights.name:
+            grad_name = 'bias_grad/' + grad_name
           g_norm = tf.norm(grads, ord='euclidean')
           tf.summary.histogram(grad_name+'_hist', grads, epoch)
           tf.summary.scalar(grad_name+'_norm', g_norm, epoch)
-                    
+          
   def on_epoch_end(self, epoch, logs=None):
     if self.log_freq and epoch % self.log_freq == 0:
       self._log_gradients(epoch)

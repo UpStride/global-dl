@@ -112,7 +112,7 @@ class GradientCallback(tf.keras.callbacks.Callback):
     y = tf.convert_to_tensor(y)
     trainable_vars = self.model.trainable_variables
     with tf.GradientTape() as tape:
-      y_pred = self.model(x, training=True)
+      y_pred = self.model(x, training=False)
       loss = self.model.compiled_loss(y, y_pred, regularization_losses=self.model.losses)
     gradients = tape.gradient(loss, trainable_vars)
     with self.grad_writer.as_default():

@@ -26,7 +26,8 @@ learning_schedule_list = [
     "polynomial_decay",
     "inverse_time_decay",
     "cosine_decay",
-    "lr_reduce_on_plateau"
+    "lr_reduce_on_plateau",
+    "explicit_schedule"
 ]
 
 _END_LEARNING_RATE = 0.00001
@@ -34,7 +35,7 @@ _END_LEARNING_RATE = 0.00001
 arguments = [
     [str, 'name', 'sgd_nesterov', 'optimized to be used', lambda x: x.lower() in optimizer_list],
     [float, 'momentum', 0.9, 'used when optimizer name is specified as sgd_momentum'],
-    [float, "lr", 0.0001, 'learning rate', lambda x: x > 0],
+    [float, "lr", 0.0001, 'initial learning rate', lambda x: x > 0],
     ['namespace', 'lr_decay_strategy', [
         [bool, 'activate', True, 'if true then use this callback'],
         ['namespace', 'lr_params', [
@@ -45,7 +46,8 @@ arguments = [
             [float, 'decay_rate', 0.5, 'used step_decay, step_decay_schedule, inverse_time_decay, lr_reduce_on_plateau, determines the factor to drop the lr'],
             [float, 'min_lr', 0.00001, 'usef in lr_reduce_on_plateau'],
             [int, 'drop_after_num_epoch', 10, 'used in step_decay, reduce lr after specific number of epochs'],
-            ['list[int]', 'drop_schedule', [30, 50, 70], 'used in step_decay_schedule, reduce lr after specific number of epochs'],
+            ['list[int]', 'drop_schedule', [30, 50, 70], 'used in step_decay_schedule and explicit_schedule, reduce lr after specific number of epochs'],
+            ['list[float]', 'list_lr', [0.01, 0.001, 0.0001], 'used in explicit_schedule, lr values after specific number of epochs'],
             [float, 'decay_step', 1.0, 'used in inverse time decay, decay_step controls how fast the decay rate reduces '],
             [bool, 'staircase', False, 'if true then return the floor value of inverse_time_decay'],
         ]],
@@ -127,6 +129,41 @@ class StepDecaySchedule(object):
       self.schedule.append(max(round(self.initial_lr * math.pow(self.drop_rate, i), 5), _END_LEARNING_RATE))
     index = [epoch <= x for x in self.drop_schedule].index(True)  # get count of true values
     return self.schedule[index]  # pick the respective lr rate
+
+
+class ExplicitSchedule:
+  """explicitDecay takes as parameters a list of learning rate and a list of epoch and change the learning rate at theses epochs
+  Both list should have the same size
+
+  Args:
+    initial_lr (float): initial learning rate when the traning starts
+    drop_schedule (list[int]): list of integers to specify which epochs to reduce the lr
+    lr_list (list[float]): list of learning rate to apply at each drop_schedule
+
+  """
+
+  def __init__(self, initial_lr: float, drop_schedule: List[int], lr_list: List[float]):
+    self.drop_schedule = drop_schedule
+    self.lr_list = lr_list
+    self.built = False
+
+    # variable so we don't need to explore the list every time
+    self.current_lr = initial_lr
+    self.current_index = -1
+
+  def build(self):
+    assert len(self.drop_schedule) == len(self.lr_list)
+    assert len(self.drop_schedule) > 0
+    self.built = True
+
+  def __call__(self, epoch: int):
+    if not self.built:
+      self.build()
+    # check if the learning rate need to change
+    if self.current_index + 1 != len(self.drop_schedule) and epoch == self.drop_schedule[self.current_index + 1]:
+      self.current_index += 1
+      self.current_lr = self.lr_list[self.current_index]
+    return self.current_lr
 
 
 class PolynomialDecay(object):
@@ -215,6 +252,11 @@ def get_lr_scheduler(lr: float, total_epochs: int, lr_params: dict):
           lr_params['drop_schedule'],
           lr_params['decay_rate'],
           total_epochs)),
+      "explicit_schedule": ExplicitSchedule(
+        lr,
+        lr_params['drop_schedule'],
+        lr_params['list_lr'],
+      ),
       "polynomial_decay": LearningRateScheduler(PolynomialDecay(
           lr,
           lr_params['power'],

@@ -1,6 +1,5 @@
 import unittest
-from .optimizers import (ExponentialDecay, StepDecay, StepDecaySchedule, PolynomialDecay, InverseTimeDecay, 
-                          CosineDecay, get_lr_scheduler, get_optimizer)
+from . import optimizers
 
 import numpy as np
 
@@ -25,6 +24,7 @@ class TestLRDecay(unittest.TestCase):
         'decay_step': 1.0,
         'alpha': 0.01,
         'staircase': False,
+        'lr_list': [1., 2., 3., 4., 5., 6.]
     }
 
   def non_increasing(self, decay):
@@ -41,7 +41,7 @@ class TestLRDecay(unittest.TestCase):
     return all([i >= j for i, j in zip(value_list, value_list[1:])])
 
   def test_exponential_decay(self):
-    decay = ExponentialDecay(self.inital_learning_rate)
+    decay = optimizers.ExponentialDecay(self.inital_learning_rate)
 
     # check initial value and higher epoch to ensure the values are matching
     self.assertEqual(decay(0), 0.045)  # keras model.fit starts from epoch 0
@@ -56,7 +56,7 @@ class TestLRDecay(unittest.TestCase):
     self.assertNotEqual(decay(self.epochs[-1]), 0.0)
 
   def test_step_decay(self):
-    decay = StepDecay(self.inital_learning_rate,
+    decay = optimizers.StepDecay(self.inital_learning_rate,
                       self.lr_params["drop_rate"],
                       self.lr_params["drop_after_num_epoch"])
 
@@ -72,10 +72,10 @@ class TestLRDecay(unittest.TestCase):
     self.assertNotEqual(decay(self.epochs[-1]), 0.0)
 
   def test_step_decay_schedule(self):
-    decay = StepDecaySchedule(self.inital_learning_rate,
-                      self.lr_params['drop_schedule'],
-                      self.lr_params["drop_rate"],
-                      self.epochs[-1])
+    decay = optimizers.StepDecaySchedule(self.inital_learning_rate,
+                              self.lr_params['drop_schedule'],
+                              self.lr_params["drop_rate"],
+                              self.epochs[-1])
 
     # check initial value and higher epoch to ensure the values are matching
     self.assertEqual(decay(0), 0.045)
@@ -91,7 +91,7 @@ class TestLRDecay(unittest.TestCase):
     self.assertNotEqual(decay(self.epochs[-1]), 0.0)
 
   def test_polynomial_decay(self):
-    decay = PolynomialDecay(self.inital_learning_rate,
+    decay = optimizers.PolynomialDecay(self.inital_learning_rate,
                             self.lr_params["power"],
                             self.epochs[-1])
 
@@ -107,7 +107,7 @@ class TestLRDecay(unittest.TestCase):
 
   def test_inverse_time_decay(self):
     for flag in [True, False]:
-      decay = InverseTimeDecay(self.inital_learning_rate,
+      decay = optimizers.InverseTimeDecay(self.inital_learning_rate,
                                self.lr_params["decay_rate"],
                                self.lr_params["decay_step"],
                                flag)
@@ -128,7 +128,7 @@ class TestLRDecay(unittest.TestCase):
       self.assertNotEqual(decay(self.epochs[-1]), 0.0)
 
   def test_cosine_decay(self):
-    decay = CosineDecay(self.inital_learning_rate,
+    decay = optimizers.CosineDecay(self.inital_learning_rate,
                         self.lr_params["alpha"],
                         self.epochs[-1])
 
@@ -142,3 +142,31 @@ class TestLRDecay(unittest.TestCase):
 
     # check value doesn't decrease to zero at the end of epoch
     self.assertNotEqual(decay(self.epochs[-1]), 0.0)
+
+  def test_explicit_decay(self):
+    decay = optimizers.ExplicitSchedule(self.inital_learning_rate,
+                                        self.lr_params['drop_schedule'],
+                                        self.lr_params['lr_list'],
+                                        )
+    self.assertEqual(decay(0), 0.045)
+    for i in range(1, 10):
+      self.assertEqual(decay(i), 0.045)
+    for i in range(10, 40):
+      self.assertEqual(decay(i), 1.)
+
+    # test empty list
+    decay = optimizers.ExplicitSchedule(self.inital_learning_rate, [], [], )
+    with self.assertRaises(AssertionError):                                        
+      decay(0)
+
+    # test list with a single element
+    decay = optimizers.ExplicitSchedule(self.inital_learning_rate,
+                                        [0],
+                                        [0.1],
+                                        )
+    
+
+    self.assertEqual(decay(0), 0.1)
+    for i in range(1, 10):
+      self.assertEqual(decay(i), 0.1)  
+    

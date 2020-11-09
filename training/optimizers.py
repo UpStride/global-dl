@@ -36,6 +36,7 @@ arguments = [
     [str, 'name', 'sgd_nesterov', 'optimized to be used', lambda x: x.lower() in optimizer_list],
     [float, 'momentum', 0.9, 'used when optimizer name is specified as sgd_momentum'],
     [float, "lr", 0.0001, 'initial learning rate', lambda x: x > 0],
+    [float, "clipnorm", 0, 'if different than zero then use gradient clipping']
     ['namespace', 'lr_decay_strategy', [
         [bool, 'activate', True, 'if true then use this callback'],
         ['namespace', 'lr_params', [
@@ -284,16 +285,21 @@ def get_lr_scheduler(lr: float, total_epochs: int, lr_params: dict):
 def get_optimizer(optimizer_param: dict):
   optimizer_name = optimizer_param['name'].lower()
   lr = optimizer_param['lr']
+
+  clipnorm = None
+  if optimizer_param['clipnorm'] != 0:
+    clipnorm = optimizer_param['clipnorm']
+
   optimizer = {
-      'adadelta': Adadelta(lr),
-      'adagrad': Adagrad(lr),
-      'adam': Adam(lr),
-      'adam_amsgrad': Adam(lr, amsgrad=True),
-      'sgd': SGD(lr),
-      'sgd_momentum': SGD(lr, momentum=optimizer_param['momentum']),
-      'sgd_nesterov': SGD(lr, momentum=optimizer_param['momentum'], nesterov=True),
-      'nadam': Nadam(lr),
-      'rmsprop': RMSprop(lr),
+      'adadelta': Adadelta(lr, clipnorm=clipnorm),
+      'adagrad': Adagrad(lr, clipnorm=clipnorm),
+      'adam': Adam(lr, clipnorm=clipnorm),
+      'adam_amsgrad': Adam(lr, amsgrad=True, clipnorm=clipnorm),
+      'sgd': SGD(lr, clipnorm=clipnorm),
+      'sgd_momentum': SGD(lr, momentum=optimizer_param['momentum'], clipnorm=clipnorm),
+      'sgd_nesterov': SGD(lr, momentum=optimizer_param['momentum'], nesterov=True, clipnorm=clipnorm),
+      'nadam': Nadam(lr, clipnorm=clipnorm),
+      'rmsprop': RMSprop(lr, clipnorm=clipnorm),
   }
 
   return optimizer[optimizer_name]

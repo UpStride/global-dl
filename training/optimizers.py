@@ -36,7 +36,7 @@ arguments = [
     [str, 'name', 'sgd_nesterov', 'optimized to be used', lambda x: x.lower() in optimizer_list],
     [float, 'momentum', 0.9, 'used when optimizer name is specified as sgd_momentum'],
     [float, "lr", 0.0001, 'initial learning rate', lambda x: x > 0],
-    [float, "clipnorm", 0, 'if different than zero then use gradient clipping']
+    [float, "clipnorm", 0, 'if different than zero then use gradient clipping'],
     ['namespace', 'lr_decay_strategy', [
         [bool, 'activate', True, 'if true then use this callback'],
         ['namespace', 'lr_params', [

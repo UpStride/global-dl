@@ -252,11 +252,11 @@ def get_lr_scheduler(lr: float, total_epochs: int, lr_params: dict):
           lr_params['drop_schedule'],
           lr_params['decay_rate'],
           total_epochs)),
-      "explicit_schedule": ExplicitSchedule(
+      "explicit_schedule": LearningRateScheduler(ExplicitSchedule(
         lr,
         lr_params['drop_schedule'],
         lr_params['list_lr'],
-      ),
+      )),
       "polynomial_decay": LearningRateScheduler(PolynomialDecay(
           lr,
           lr_params['power'],

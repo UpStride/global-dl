@@ -115,7 +115,7 @@ def get_callbacks(config, log_dir):
   callbacks = [tensorboard_cb, tf.keras.callbacks.EarlyStopping('val_loss', patience=config['early_stopping'])]
   if config['optimizer']['lr_decay_strategy']['activate']:
     callbacks.append(
-        get_lr_scheduler(config['optimizer']['lr'], config['num_epochs'], config['optimizer']['lr_decay_strategy']['lr_params'])
+        get_lr_scheduler(config['optimizer']['lr'], config['num_epochs'], config['optimizer']['lr_decay_strategy']['lr_params'], log_dir)
     )
   return callbacks
 

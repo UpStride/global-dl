@@ -3,6 +3,7 @@ from typing import List
 import os
 import tensorflow as tf
 from tensorflow.keras.optimizers import Adadelta, Adagrad, Adam, Adamax, SGD, Nadam, RMSprop
+from tensorflow_addons.optimizers import Lookahead, RectifiedAdam
 from tensorflow.keras.callbacks import LearningRateScheduler, ReduceLROnPlateau, Callback
 import matplotlib.pyplot as plt
 import numpy as np
@@ -19,6 +20,7 @@ optimizer_list = [
     "sgd_nesterov",
     "nadam",
     "rmsprop",
+    "radam",
 ]
 
 LEARNING_SCHEDULE_LIST = [
@@ -32,7 +34,8 @@ LEARNING_SCHEDULE_LIST = [
     "lr_reduce_on_plateau",
     "explicit_schedule",
     "one_cycle",
-    "lr_finder"
+    "flat_and_anneal",
+    "lr_finder",
 ]
 
 _END_LEARNING_RATE = 0.0000001
@@ -44,6 +47,8 @@ arguments = [
     [float, "weight_decay", 0.0001, 'weight of l2 regularization', lambda x: x > 0],
     [float, "clipnorm", 0, 'if different than zero then use gradient norm clipping'],
     [float, "clipvalue", 0, 'if different than zero then use gradient value clipping'],
+    [bool, "lookahead", False, "whether to use lookahead with the optimizer"],
+    [int, "sync_period", 6, "Used only in lookahead. It is the synchronization period"],
     ['namespace', 'lr_decay_strategy', [
         [bool, 'activate', True, 'if true then use this callback'],
         ['namespace', 'lr_params', [
@@ -56,7 +61,8 @@ arguments = [
             [float, 'max_lr', 0.1, 'used in one_cycle'],
             [float, 'min_momentum', 0.8, 'used in one_cycle'],
             [float, 'max_momentum', 0.95, 'used in one_cycle'],
-            [int, 'max_steps', 200, 'used in lr_finder and onecycle'],
+            [float, 'phase_1_pct', 0.3, 'used in one_cycle and flat_and_anneal. Percentage of the training dedicated to the first phase'],
+            [int, 'max_steps', 200, 'used in lr_finder, onecycle and flat_and_anneal'],
             [int, 'drop_after_num_epoch', 10, 'used in step_decay, reduce lr after specific number of epochs'],
             ['list[int]', 'drop_schedule', [30, 50, 70], 'used in step_decay_schedule and explicit_schedule, reduce lr after specific number of epochs'],
             ['list[float]', 'list_lr', [0.01, 0.001, 0.0001], 'used in explicit_schedule, lr values after specific number of epochs'],
@@ -67,11 +73,28 @@ arguments = [
 ]
 
 
-class LRFinder(Callback):
-  """Callback that exponentially adjusts the learning rate after each training batch between start_lr and
+class GenericScheduler(Callback):
+  def __init__(self):
+    super(GenericScheduler, self).__init__()
+
+  def get_lr(self):
+    return tf.keras.backend.get_value(self.model.optimizer.lr)
+
+  def get_momentum(self):
+    return tf.keras.backend.get_value(self.model.optimizer.momentum)
+
+  def set_lr(self, lr):
+    tf.keras.backend.set_value(self.model.optimizer.lr, lr)
+
+  def set_momentum(self, mom):
+    tf.keras.backend.set_value(self.model.optimizer.momentum, mom)
+
+
+class LRFinder(GenericScheduler):
+  """
+  Callback that exponentially adjusts the learning rate after each training batch between start_lr and
   end_lr for a maximum number of batches: max_step. The loss and learning rate are recorded at each step allowing
-  visually finding a good learning rate as per https://sgugger.github.io/how-do-you-find-a-good-learning-rate.html via
-  the plot method.
+  visually finding a good learning rate.
   """
 
   def __init__(self, start_lr: float = 1e-6, end_lr: float = 10, max_steps: int = 100, smoothing=0.7, log_dir=None):
@@ -91,7 +114,7 @@ class LRFinder(Callback):
 
   def on_train_batch_begin(self, batch, logs=None):
     self.lr = self.exp_annealing(self.step_lrf)
-    tf.keras.backend.set_value(self.model.optimizer.lr, self.lr)
+    self.set_lr(self.lr)
 
     for m in self.model.metrics:
       m.reset_states()
@@ -122,6 +145,7 @@ class LRFinder(Callback):
       self.plot()
 
     self.step_lrf += 1
+
   def exp_annealing(self, step):
     return self.start_lr * (self.end_lr / self.start_lr) ** (step * 1. / self.max_steps)
 
@@ -138,8 +162,7 @@ class LRFinder(Callback):
 
     ax.xaxis.set_major_formatter(plt.FormatStrFormatter('%.0e'))
     ax.plot(self.lrs, self.losses)
-    plt.show()  # does this work ? will see
-    fig.savefig(os.path.join(self.log_dir, 'lr_range_test.png'))
+    fig.savefig(os.path.join(self.log_dir, 'lr_finder.png'))
 
 
 class CosineAnnealer:
@@ -156,9 +179,54 @@ class CosineAnnealer:
     return self.end + (self.start - self.end) / 2. * cos
 
 
-class OneCycleScheduler(Callback):
-  """ Callback
-that schedules the learning rate on a 1cycle policy as per Leslie Smith's paper(https://arxiv.org/pdf/1803.09820.pdf).
+class FlatAndAnnealScheduler(GenericScheduler):
+  """
+  Callback that follows the flat and anneal learning rate policy.
+  The learning rate is constant during the first phase. I then decreases using cosine annealing during the second phase.
+  """
+  def __init__(self, lr, steps, phase_1_pct=0.8, log_dir=None):
+    super(FlatAndAnnealScheduler, self).__init__()
+    self.flat_lr = lr
+    self.final_lr = lr / 1e4
+    phase_1_steps = steps * phase_1_pct
+
+    self.phase_1_steps = phase_1_steps
+    self.phase_2_steps = steps - phase_1_steps
+    self.step = 0
+    self.max_steps = steps
+
+    self.annealer = CosineAnnealer(lr, self.final_lr, self.phase_2_steps)
+
+    self.log_dir = log_dir
+    self.file_writer = tf.summary.create_file_writer(os.path.join(self.log_dir, "metrics"))
+
+  def on_train_begin(self, logs=None):
+    self.step = 0
+    self.set_lr(self.flat_lr)
+
+  def on_train_batch_begin(self, batch, logs=None):
+    lr = self.get_lr()
+    with self.file_writer.as_default():
+      tf.summary.scalar("learning rate by steps", data=lr, step=self.step)
+
+  def on_train_batch_end(self, batch, logs=None):
+    self.step += 1
+    if self.step < self.phase_1_steps:
+      self.set_lr(self.flat_lr)
+    elif self.step > self.max_steps:
+      self.model.stop_training = True
+    else:
+      self.set_lr(self.annealer.step())
+
+  def on_epoch_end(self, epoch, logs=None):
+    lr = self.get_lr()
+    with self.file_writer.as_default():
+      tf.summary.scalar("learning rate by epochs", data=lr, step=epoch)
+
+
+class OneCycleScheduler(GenericScheduler):
+  """
+  Callback that schedules the learning rate on a 1cycle policy as per Leslie Smith's paper(https://arxiv.org/pdf/1803.09820.pdf).
   If the model supports a momentum parameter, it will also be adapted by the schedule.
   The implementation adopts additional improvements as per the fastai library: https://docs.fast.ai/callbacks.one_cycle.html, where
   only two phases are used and the adaptation is done using cosine annealing.
@@ -173,7 +241,7 @@ that schedules the learning rate on a 1cycle policy as per Leslie Smith's paper(
   def __init__(self, lr_max, steps, mom_min=0.85, mom_max=0.95, phase_1_pct=0.3, div_factor=25., log_dir=None):
     super(OneCycleScheduler, self).__init__()
     lr_min = lr_max / div_factor
-    final_lr = lr_max / (div_factor * 1e3)
+    final_lr = lr_max / (div_factor * 1e4)
     phase_1_steps = steps * phase_1_pct
     phase_2_steps = steps - phase_1_steps
 
@@ -227,43 +295,11 @@ that schedules the learning rate on a 1cycle policy as per Leslie Smith's paper(
       tf.summary.scalar("momentum by epochs", data=mom, step=epoch)
 
 
-  def get_lr(self):
-    try:
-      return tf.keras.backend.get_value(self.model.optimizer.lr)
-    except AttributeError:
-      return None
-
-  def get_momentum(self):
-    try:
-      return tf.keras.backend.get_value(self.model.optimizer.momentum)
-    except AttributeError:
-      return None
-
-  def set_lr(self, lr):
-    try:
-      tf.keras.backend.set_value(self.model.optimizer.lr, lr)
-    except AttributeError:
-      pass  # ignore
-
-  def set_momentum(self, mom):
-    try:
-      tf.keras.backend.set_value(self.model.optimizer.momentum, mom)
-    except AttributeError:
-      pass  # ignore
-
   def lr_schedule(self):
     return self.phases[self.phase][0]
 
   def mom_schedule(self):
     return self.phases[self.phase][1]
-
-  def plot(self):
-    ax = plt.subplot(1, 2, 1)
-    ax.plot(self.lrs)
-    ax.set_title('Learning Rate')
-    ax = plt.subplot(1, 2, 2)
-    ax.plot(self.moms)
-    ax.set_title('Momentum')
 
 
 class ExponentialDecay:
@@ -492,12 +528,17 @@ def get_lr_scheduler(lr: float, total_epochs: int, lr_params: dict, log_dir=None
           max_steps=lr_params["max_steps"],
           log_dir=log_dir),
       "one_cycle": OneCycleScheduler(
-        lr_max=lr_params["max_lr"],
-        mom_max=lr_params["max_momentum"],
-        mom_min=lr_params["min_momentum"],
-        steps=lr_params["max_steps"],
-        log_dir=log_dir
-      )
+          lr_max=lr_params["max_lr"],
+          mom_max=lr_params["max_momentum"],
+          mom_min=lr_params["min_momentum"],
+          steps=lr_params["max_steps"],
+          phase_1_pct=lr_params["phase_1_pct"],
+          log_dir=log_dir),
+      "flat_and_anneal": FlatAndAnnealScheduler(
+          lr=lr,
+          phase_1_pct=lr_params["phase_1_pct"],
+          steps=lr_params["max_steps"],
+          log_dir=log_dir)
   }
   return get_lr[lr_schedule_name]
 
@@ -523,6 +564,13 @@ def get_optimizer(optimizer_param: dict):
       'sgd_nesterov': SGD(lr, momentum=optimizer_param['momentum'], nesterov=True, **kwargs),
       'nadam': Nadam(lr, **kwargs),
       'rmsprop': RMSprop(lr, **kwargs),
+      'radam': RectifiedAdam(lr, **kwargs),
   }
 
-  return optimizer[optimizer_name]
+  initialized_optimizer = optimizer[optimizer_name]
+
+  if optimizer_param['lookahead']:
+    initialized_optimizer = Lookahead(optimizer=initialized_optimizer, sync_period=optimizer_param['sync_period'])
+
+
+  return initialized_optimizer

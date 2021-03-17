@@ -52,89 +52,168 @@ class TestCountFlops(unittest.TestCase):
   def hard_swish(self, x):
     return x * self.hard_sigmoid(x)
 
-  # def generic_test(self, output, upstride_type, get_count_flops=False):
-  #   out = output(self.input)
-  #   model = tf.keras.Model(self.input, out) 
-  #   efficient_count = count_flops_efficient(model, upstride_type)
-  #   if get_count_flops:
-  #     count = count_flops(model)
-  #     print(count, efficient_count)
-  #     return count, efficient_count
-  #   else:
-  #     print(efficient_count)
-  #     return efficient_count
+  def generic_test(self, output, upstride_type):
+    out = output(self.input)
+    model = tf.keras.Model(self.input, out) 
+    efficient_count = count_flops_efficient(model, upstride_type)
+    return efficient_count
       
-  # def test_conv2d_no_bias(self):
-  #   x = tf.keras.layers.Conv2D(8, (3, 3), use_bias=False)
+  def test_conv2d_no_bias(self):
+    x = tf.keras.layers.Conv2D(8, (3, 3), use_bias=False)
 
-  #   # Test upstride_type -1
-  #   ef = self.generic_test(x, upstride_type=-1, get_count_flops=True)
-  #   self.assertEqual(ef, 388800) # (k_h * k_w * c_in * c_out * out_h * out_w) * 2
+    # Test upstride_type -1
+    ef = self.generic_test(x, upstride_type=-1)
+    self.assertEqual(ef, 388800) # (k_h * k_w * c_in * c_out * out_h * out_w) * 2
 
-  #   # Test upstride_type 0
-  #   f, ef = self.generic_test(x, upstride_type=0, get_count_flops=True)
-  #   self.assertEqual(ef, 388800) # (k_h * k_w * c_in * c_out * out_h * out_w) * 2
+    # Test upstride_type 0
+    ef = self.generic_test(x, upstride_type=0)
+    self.assertEqual(ef, 388800) # (k_h * k_w * c_in * c_out * out_h * out_w) * 2
 
-  #   # Test upstride_type 1
-  #   ef = self.generic_test(x, upstride_type=1)
-  #   # N = 2**2
-  #   # N**2 * (k_h * k_w * c_in * c_out * out_h * out_w) 
-  #   #
-  #   # N*(N-1) * (k_h * k_w * c_in * c_out * out_h * out_w) 
-  #   self.assertEqual(ef, 510976512) # (k_h * k_w * c_in * c_out * out_h * out_w) * 2
+    # Test upstride_type 1
+    ef = self.generic_test(x, upstride_type=1)
+    # N = 2**2
+    # N**2 * (k_h * k_w * c_in * c_out * out_h * out_w) 
+    # N*(N-1) * (k_h * k_w * c_in * c_out * out_h * out_w) 
+    # 3 times more flops upstride type -1 or 0
+    self.assertEqual(ef, 1166400)
 
-  #   # Test upstride_type 2
-  #   ef = self.generic_test(x, upstride_type=2)
-  #   # N = 2**4
-  #   # N**2 * (k_h * k_w * c_in * c_out * out_h * out_w) 
-  #   # N*(N-1) * (k_h * k_w * c_in * c_out * out_h * out_w) 
-  #   self.assertEqual(ef, 2384557056) # (k_h * k_w * c_in * c_out * out_h * out_w) * 2
+    # Test upstride_type 2
+    ef = self.generic_test(x, upstride_type=2)
+    # N = 2**4
+    # N**2 * (k_h * k_w * c_in * c_out * out_h * out_w) 
+    # N*(N-1) * (k_h * k_w * c_in * c_out * out_h * out_w) 
+    # 14 times more flops upstride type -1 or 0
+    self.assertEqual(ef, 5443200)
 
-  #   # Test upstride_type 3
-  #   ef = self.generic_test(x, upstride_type=3)
-  #   # N = 2**8
-  #   # N**2 * (k_h * k_w * c_in * c_out * out_h * out_w) 
-  #   # N*(N-1) * (k_h * k_w * c_in * c_out * out_h * out_w) 
-  #   self.assertEqual(ef, 26570778624) # (k_h * k_w * c_in * c_out * out_h * out_w) * 2
+    # Test upstride_type 3
+    ef = self.generic_test(x, upstride_type=3)
+    # N = 2**8
+    # N**2 * (k_h * k_w * c_in * c_out * out_h * out_w) 
+    # N*(N-1) * (k_h * k_w * c_in * c_out * out_h * out_w) 
+    # 14 times more flops upstride type -1 or 0
+    self.assertEqual(ef, 23328000) # (k_h * k_w * c_in * c_out * out_h * out_w) * 2
 
-  # def test_conv2d_no_bias_type2(self):
-  #   x = tf.keras.layers.Conv2D(16, (3, 3), use_bias=False)
-  #   ef = self.generic_test(x, upstride_type=2)
-  #   print(ef)
-  #   # N**2 * (k_h * k_w * c_in * c_out * out_h * out_w) + N*(N-1) (k_h * k_w * c_in * c_out * out_h * out_w)
-  #   self.assertEqual(ef, 2721600)  
+  def test_conv2d_bias(self):
+    x = tf.keras.layers.Conv2D(8, (3, 3), use_bias=True)
 
-  # def test_conv2d_bias(self):
-  #   i = tf.keras.layers.Input((224, 224, 3), batch_size=1)
-  #   x = tf.keras.layers.Conv2D(64, (3, 3))(i)
-  #   model = tf.keras.Model(i, x)
-  #   f = count_flops(model)
-  #   ef = count_flops_efficient(model, upstride_type=-1)
-  #   self.assertTrue((f-ef)/f < 1e-4)
+    # Test upstride_type -1
+    ef = self.generic_test(x, upstride_type=-1)
+    self.assertEqual(ef, 396000) # (k_h * k_w * c_in * c_out * out_h * out_w) * 2
 
-  # def test_conv2d_strides(self):
-  #   i = tf.keras.layers.Input((224, 224, 3), batch_size=1)
-  #   x = tf.keras.layers.Conv2D(64, (3, 3), strides=(2, 2))(i)
-  #   model = tf.keras.Model(i, x)
-  #   f = count_flops(model)
-  #   ef = count_flops_efficient(model, upstride_type=-1)
-  #   self.assertTrue((f-ef)/f < 1e-4)
+    # Test upstride_type 0
+    ef = self.generic_test(x, upstride_type=0)
+    self.assertEqual(ef, 396000) # (k_h * k_w * c_in * c_out * out_h * out_w) * 2
 
-  # def test_conv2d_padding_same(self):
-  #   i = tf.keras.layers.Input((224, 224, 3), batch_size=1)
-  #   x = tf.keras.layers.Conv2D(64, (3, 3), padding='same')(i)
-  #   model = tf.keras.Model(i, x)
-  #   f = count_flops(model)
-  #   ef = count_flops_efficient(model, upstride_type=-1)
-  #   self.assertTrue((f-ef)/f < 1e-4)
+    # Test upstride_type 1
+    ef = self.generic_test(x, upstride_type=1)
+    # N = 2**2
+    # N**2 * (k_h * k_w * c_in * c_out * out_h * out_w) 
+    # N*(N-1) * (k_h * k_w * c_in * c_out * out_h * out_w) 
+    # 3 times more flops upstride type -1 or 0
+    self.assertEqual(ef, 1180800)
 
-  # def test_conv2d_relu(self):
-  #   i = tf.keras.layers.Input((224, 224, 3), batch_size=1)
-  #   x = tf.keras.layers.Conv2D(64, (3, 3), activation='relu')(i)
-  #   model = tf.keras.Model(i, x)
-  #   f = count_flops(model)
-  #   ef = count_flops_efficient(model, upstride_type=-1)
-  #   self.assertTrue((f-ef)/f < 1e-4)
+    # Test upstride_type 2
+    ef = self.generic_test(x, upstride_type=2)
+    # N = 2**4
+    # N**2 * (k_h * k_w * c_in * c_out * out_h * out_w) 
+    # N*(N-1) * (k_h * k_w * c_in * c_out * out_h * out_w) 
+    # 14 times more flops upstride type -1 or 0
+    self.assertEqual(ef, 5472000)
+
+    # Test upstride_type 3
+    ef = self.generic_test(x, upstride_type=3)
+    # N = 2**8
+    # N**2 * (k_h * k_w * c_in * c_out * out_h * out_w) 
+    # N*(N-1) * (k_h * k_w * c_in * c_out * out_h * out_w) 
+    # 60 times more flops upstride type -1 or 0
+    self.assertEqual(ef, 23385600) # (k_h * k_w * c_in * c_out * out_h * out_w) * 2
+  
+  def test_conv2d_stride(self):
+    x = tf.keras.layers.Conv2D(8, (3, 3), strides=(2, 2), use_bias=True)
+
+    # Test upstride_type -1
+    ef = self.generic_test(x, upstride_type=-1)
+    self.assertEqual(ef, 99000) # (k_h * k_w * c_in * c_out / s * out_h / s * out_w) * 2
+
+    # Test upstride_type 0
+    ef = self.generic_test(x, upstride_type=0)
+    self.assertEqual(ef, 99000) # (k_h * k_w * c_in * c_out * out_h * out_w) * 2
+
+    # Test upstride_type 1
+    ef = self.generic_test(x, upstride_type=1)
+    # N = 2**2
+    # N**2 * (k_h * k_w * c_in * c_out * out_h * out_w) 
+    # N*(N-1) * (k_h * k_w * c_in * c_out * out_h * out_w) 
+    # 3 times more flops upstride type -1 or 0
+    self.assertEqual(ef, 295200)
+
+    # Test upstride_type 2
+    ef = self.generic_test(x, upstride_type=2)
+    # N = 2**4
+    # N**2 * (k_h * k_w * c_in * c_out * out_h * out_w) 
+    # N*(N-1) * (k_h * k_w * c_in * c_out * out_h * out_w) 
+    # 14 times more flops upstride type -1 or 0
+    self.assertEqual(ef, 1368000)
+
+    # Test upstride_type 3
+    ef = self.generic_test(x, upstride_type=3)
+    # N = 2**8
+    # N**2 * (k_h * k_w * c_in * c_out * out_h * out_w) 
+    # N*(N-1) * (k_h * k_w * c_in * c_out * out_h * out_w) 
+    # 60 times more flops upstride type -1 or 0
+    self.assertEqual(ef, 5846400)
+  
+  def test_conv2d_pad_same(self):
+    x = tf.keras.layers.Conv2D(8, (3, 3), padding="SAME", use_bias=False)
+
+    # Test upstride_type -1
+    ef = self.generic_test(x, upstride_type=-1)
+    self.assertEqual(ef, 442368) # (k_h * k_w * c_in * c_out * out_h  * out_w) * 2
+
+    # Test upstride_type 0
+    ef = self.generic_test(x, upstride_type=0)
+    self.assertEqual(ef, 442368) # (k_h * k_w * c_in * c_out * out_h * out_w) * 2
+
+    # Test upstride_type 1
+    ef = self.generic_test(x, upstride_type=1)
+    # N = 2**2
+    # N**2 * (k_h * k_w * c_in * c_out * out_h * out_w) 
+    # N*(N-1) * (k_h * k_w * c_in * c_out * out_h * out_w) 
+    # 3 times more flops upstride type -1 or 0
+    self.assertEqual(ef, 1327104)
+
+    # Test upstride_type 2
+    ef = self.generic_test(x, upstride_type=2)
+    # N = 2**4
+    # N**2 * (k_h * k_w * c_in * c_out * out_h * out_w) 
+    # N*(N-1) * (k_h * k_w * c_in * c_out * out_h * out_w) 
+    # 14 times more flops upstride type -1 or 0
+    self.assertEqual(ef, 6193152)
+
+    # Test upstride_type 3
+    ef = self.generic_test(x, upstride_type=3)
+    # N = 2**8
+    # N**2 * (k_h * k_w * c_in * c_out * out_h * out_w) 
+    # N*(N-1) * (k_h * k_w * c_in * c_out * out_h * out_w) 
+    # 60 times more flops upstride type -1 or 0
+    self.assertEqual(ef, 26542080)
+  
+
+  def test_conv2d_padding_same(self):
+    i = tf.keras.layers.Input((224, 224, 3), batch_size=1)
+    x = tf.keras.layers.Conv2D(64, (3, 3), padding='same')(i)
+    model = tf.keras.Model(i, x)
+    f = count_flops(model)
+    ef = count_flops_efficient(model, upstride_type=-1)
+    self.assertTrue((f-ef)/f < 1e-4)
+
+  def test_conv2d_relu(self):
+    i = tf.keras.layers.Input((224, 224, 3), batch_size=1)
+    x = tf.keras.layers.Conv2D(64, (3, 3), activation='relu')(i)
+    model = tf.keras.Model(i, x)
+    f = count_flops(model)
+    ef = count_flops_efficient(model, upstride_type=-1)
+    self.assertTrue((f-ef)/f < 1e-4)
 
   def test_relu(self):
     i = tf.keras.layers.Input((224, 224, 3), batch_size=1)
@@ -160,74 +239,74 @@ class TestCountFlops(unittest.TestCase):
     print(ef)
     self.assertEqual(ef, 5) # 2 * hard_sigmoid 
 
-  # def test_max_pooling(self):
-  #   i = tf.keras.layers.Input((224, 224, 3), batch_size=1)
-  #   x = tf.keras.layers.MaxPooling2D((3, 3), strides=(2, 2))(i)
-  #   model = tf.keras.Model(i, x)
-  #   f = count_flops(model)
-  #   ef = count_flops_efficient(model, upstride_type=-1)
-  #   self.assertEqual(f, ef)
+  def test_max_pooling(self):
+    i = tf.keras.layers.Input((224, 224, 3), batch_size=1)
+    x = tf.keras.layers.MaxPooling2D((3, 3), strides=(2, 2))(i)
+    model = tf.keras.Model(i, x)
+    f = count_flops(model)
+    ef = count_flops_efficient(model, upstride_type=-1)
+    self.assertEqual(f, ef)
 
-  # def test_global_max_pooling(self):
-  #   i = tf.keras.layers.Input((224, 224, 3), batch_size=1)
-  #   x = tf.keras.layers.GlobalMaxPooling2D()(i)
-  #   model = tf.keras.Model(i, x)
-  #   # f = count_flops(model) # returns 0
-  #   ef = count_flops_efficient(model, upstride_type=-1)
-  #   self.assertEqual(ef, 150528) # 224 * 224 * 3
+  def test_global_max_pooling(self):
+    i = tf.keras.layers.Input((224, 224, 3), batch_size=1)
+    x = tf.keras.layers.GlobalMaxPooling2D()(i)
+    model = tf.keras.Model(i, x)
+    # f = count_flops(model) # returns 0
+    ef = count_flops_efficient(model, upstride_type=-1)
+    self.assertEqual(ef, 150528) # 224 * 224 * 3
 
-  # def test_global_avg_pooling(self):
-  #   i = tf.keras.layers.Input((224, 224, 3), batch_size=1)
-  #   x = tf.keras.layers.GlobalAveragePooling2D()(i)
-  #   model = tf.keras.Model(i, x)
-  #   f = count_flops(model) 
-  #   ef = count_flops_efficient(model, upstride_type=-1)
-  #   self.assertEqual(f, ef) 
+  def test_global_avg_pooling(self):
+    i = tf.keras.layers.Input((224, 224, 3), batch_size=1)
+    x = tf.keras.layers.GlobalAveragePooling2D()(i)
+    model = tf.keras.Model(i, x)
+    f = count_flops(model) 
+    ef = count_flops_efficient(model, upstride_type=-1)
+    self.assertEqual(f, ef) 
   
-  # def test_add(self):
-  #   i = tf.keras.layers.Input((224, 224, 3), batch_size=1)
-  #   x = tf.keras.layers.Add()([i, i])
-  #   model = tf.keras.Model(i, x)
-  #   # f = count_flops(model) # returns 0
-  #   ef = count_flops_efficient(model, upstride_type=-1)
-  #   self.assertEqual(ef, 150528) # 224 * 224 * 3
+  def test_add(self):
+    i = tf.keras.layers.Input((224, 224, 3), batch_size=1)
+    x = tf.keras.layers.Add()([i, i])
+    model = tf.keras.Model(i, x)
+    # f = count_flops(model) # returns 0
+    ef = count_flops_efficient(model, upstride_type=-1)
+    self.assertEqual(ef, 150528) # 224 * 224 * 3
 
-  # def test_multiply(self):
-  #   i = tf.keras.layers.Input((224, 224, 3), batch_size=1)
-  #   x = tf.keras.layers.Multiply()([i, i])
-  #   model = tf.keras.Model(i, x)
-  #   f = count_flops(model)
-  #   ef = count_flops_efficient(model, upstride_type=-1)
-  #   self.assertEqual(f, ef)
+  def test_multiply(self):
+    i = tf.keras.layers.Input((224, 224, 3), batch_size=1)
+    x = tf.keras.layers.Multiply()([i, i])
+    model = tf.keras.Model(i, x)
+    f = count_flops(model)
+    ef = count_flops_efficient(model, upstride_type=-1)
+    self.assertEqual(f, ef)
 
-  # def test_dense_no_biases(self):
-  #   i = tf.keras.layers.Input((1000), batch_size=1)
-  #   x = tf.keras.layers.Dense(100, use_bias=False)(i)
-  #   model = tf.keras.Model(i, x)
-  #   f = count_flops(model)
-  #   ef = count_flops_efficient(model, upstride_type=-1)
-  #   # f = 400001 ??? I have no explanation for this
-  #   # ef = 200000
-  #   self.assertEqual(ef, 200000) # 1000 * 100 * 2 
+  def test_dense_no_biases(self):
+    i = tf.keras.layers.Input((1000), batch_size=1)
+    x = tf.keras.layers.Dense(100, use_bias=False)(i)
+    model = tf.keras.Model(i, x)
+    f = count_flops(model)
+    ef = count_flops_efficient(model, upstride_type=-1)
+    # f = 400001 ??? I have no explanation for this
+    # ef = 200000
+    self.assertEqual(ef, 200000) # 1000 * 100 * 2 
 
-  # def test_dense_biases(self):
-  #   i = tf.keras.layers.Input((1000), batch_size=1)
-  #   x = tf.keras.layers.Dense(100)(i)
-  #   model = tf.keras.Model(i, x)
-  #   f = count_flops(model)
-  #   ef = count_flops_efficient(model)
-  #   self.assertEqual(ef, 200100) # (1000 * 100 * 2) + 100
+  def test_dense_biases(self):
+    i = tf.keras.layers.Input((1000), batch_size=1)
+    x = tf.keras.layers.Dense(100)(i)
+    model = tf.keras.Model(i, x)
+    f = count_flops(model)
+    ef = count_flops_efficient(model)
+    self.assertEqual(ef, 200100) # (1000 * 100 * 2) + 100
 
-  # def test_depthwiseconv2d(self):
-  #   i = tf.keras.layers.Input((32, 32, 3), batch_size=1)
-  #   x = tf.keras.layers.DepthwiseConv2D((3, 3), use_bias=False)(i)
-  #   model = tf.keras.Model(i, x)
-  #   ef = count_flops_efficient(model, upstride_type=-1)
-  #   self.assertTrue(ef, (48600)) # 30 * 30 * 3 * 3 * 3 * 2
+  def test_depthwiseconv2d(self):
+    i = tf.keras.layers.Input((32, 32, 3), batch_size=1)
+    x = tf.keras.layers.DepthwiseConv2D((3, 3), use_bias=False)(i)
+    model = tf.keras.Model(i, x)
+    ef = count_flops_efficient(model, upstride_type=-1)
+    self.assertTrue(ef, (48600)) # 30 * 30 * 3 * 3 * 3 * 2
 
-  # def test_depthwiseconv2d_bias(self):
-  #   i = tf.keras.layers.Input((32, 32, 3), batch_size=1)
-  #   x = tf.keras.layers.DepthwiseConv2D((3, 3), use_bias=True)(i)
-  #   model = tf.keras.Model(i, x)
-  #   ef = count_flops_efficient(model, upstride_type=-1)
-  #   self.assertTrue(ef, (48600)) # (30 * 30 * 3 * 3 * 3 * 2) + (3 * 3 * 3)
+  def test_depthwiseconv2d_bias(self):
+    i = tf.keras.layers.Input((32, 32, 3), batch_size=1)
+    x = tf.keras.layers.DepthwiseConv2D((3, 3), use_bias=True)(i)
+    model = tf.keras.Model(i, x)
+    ef = count_flops_efficient(model, upstride_type=-1)
+    self.assertTrue(ef, (48600)) # (30 * 30 * 3 * 3 * 3 * 2) + (3 * 3 * 3)

@@ -50,7 +50,8 @@ def _count_linear_layer(layer, N):
       input_channels = input_shape[3]
       h, w, output_channels = output_shape[1:]
     w_h, w_w = layer.kernel_size
-    if isinstance(layer, tf.keras.layers.DepthwiseConv2D): 
+    class_name = layer.__class__.__name__
+    if class_name == "DepthwiseConv2D": 
       output_channels = 1
     # grouping the products to input and outputs
     input_group = w_h * w_w * input_channels

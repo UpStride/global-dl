@@ -7,10 +7,12 @@ def log10(x):
   base = 10.
   return tf.math.log(x) / tf.math.log(base)
 
+
 def calc_accuracy(y_true, y_pred):
   y_true = tf.math.argmax(tf.convert_to_tensor(y_true, tf.float32), axis=-1)
   y_pred = tf.math.argmax(tf.convert_to_tensor(y_pred, tf.float32), axis=-1)
   return tf.math.reduce_mean(tf.cast((tf.math.equal(y_true, y_pred)), dtype=tf.float32))
+
 
 def count_trainable_params(model):
   """
@@ -21,8 +23,9 @@ def count_trainable_params(model):
       Total number ot trainable parameters
   """
   weights = model.trainable_weights
-  total_trainable_params = int(sum(np.prod(tf.size(p)) for p in object_identity.ObjectIdentitySet(weights)))
+  total_trainable_params = int(sum(np.prod(p.shape.as_list()) for p in object_identity.ObjectIdentitySet(weights)))
   return total_trainable_params
+
 
 def _count_linear_layer(layer, num_of_blades):
   """
@@ -37,7 +40,7 @@ def _count_linear_layer(layer, num_of_blades):
   """
   input_shape = layer.input_shape
   output_shape = layer.output_shape
-  output_group = np.prod(output_shape[1:])
+  n_elements_in_output_tensor = np.prod(output_shape[1:])
   class_name = layer.__class__.__name__
 
   # we get output image size (H*W) (this is channel first/last dependent)
@@ -47,18 +50,17 @@ def _count_linear_layer(layer, num_of_blades):
     # get the input channels and output channels
     input_channels = input_shape[channel_index]
     output_channels = output_shape[channel_index]
-
-  # we get kernel size (this is layer dependant (Dense vs Conv))
   # Depthwise layer output channels are same as input.
-  # It is a generalized case of group convolution where input channels are same as number of groups
-  # The expected output channel is output_channels / groups. 
+  # if we multiply all the dimensions of the kernel we will not have the number of operations
 
   # When DepwiseConv2D is substituted with Conv2D with groups = input_channels. The division operation on the groups are
-  # already applied to the input channels. eg: H x W x (c_in / groups).
+  # already applied to the input channels. eg: H x W' x (c_in / groups).
   if class_name == "DepthwiseConv2D": 
     # In keras, the layer.output_shape for DepthwiseConv2D is (h * w * c_out), where c_out is same as c_in.
     # Hence dividing by input_channels to get the correct FLOPs count
-    output_group /= input_channels 
+    n_elements_in_output_tensor /= input_channels 
+
+  # we get kernel size (this is layer dependant (Dense vs Conv))
   if len(input_shape) == 4:
     kernel_size = np.prod(layer.kernel_size)
     input_group = np.prod([kernel_size, input_channels])
@@ -68,22 +70,29 @@ def _count_linear_layer(layer, num_of_blades):
     raise NotImplementedError("Flops for {layer.name} layer not implemented")
 
   # compute the product groups
-  n_mul = (num_of_blades**2) * (input_group * output_group)
+  n_mul = (num_of_blades**2) * (input_group * n_elements_in_output_tensor)
   # max(1, num_of_blades-1) to ensure the n_add doesn't becomes zero when num_of_blades = 1
-  n_add = num_of_blades * (max(1, num_of_blades-1)) * (input_group * output_group)
+  n_add = num_of_blades * (max(1, num_of_blades-1)) * (input_group * n_elements_in_output_tensor)
   
+  # In order to calculate the FLOPs for a linear layer, 
+  # If the kernel has K elements, the number of operations to compute one output element is K multiplication 
+  # and (K-1) addition (except for depthwise). 
+  # So if the output has E elements, the number of operations is E*(2K-1) 
+  # In this case the -1 is negilible, so we don't keep it in our calculation.
   flops = n_mul + n_add
 
   if layer.use_bias:
-    flops += output_group * num_of_blades
+    flops += n_elements_in_output_tensor * num_of_blades
 
   return int(flops)
+
 
 def _count_flops_relu(layer):
   """ Dev note : current tensorflow profiler say ReLU doesn't cost anything...
   """
   # 2 operations per component : compare and assign
   return np.prod(layer.output_shape[1:]) * 2
+
 
 def _count_flops_hard_sigmoid(layer):
   """count FLOPs for hard_sigmoid activation
@@ -99,6 +108,7 @@ def _count_flops_hard_sigmoid(layer):
   # relu + one addition and one division
   return int(relu + add_divide)
 
+
 def _count_flops_hard_swish(layer):
   """count FLOPs for hard_swish activation
 
@@ -112,6 +122,7 @@ def _count_flops_hard_swish(layer):
   x = np.prod(layer.output_shape[1:])
   return int(hard_sigmoid + x) # hard_sigmoid + 1 multiplication
 
+
 def _count_flops_maxpool2d(layer):
   """count flops for layer max pool 2d
 
@@ -122,6 +133,7 @@ def _count_flops_maxpool2d(layer):
       int: flops
   """
   return layer.pool_size[0] * layer.pool_size[1] * np.prod(layer.output_shape[1:])
+
 
 def _count_flops_global_avg_max_pooling(layer):
   """count flops for layer global (MaxPooling2D or AvgPooling2D)
@@ -138,6 +150,7 @@ def _count_flops_global_avg_max_pooling(layer):
   """
   return np.prod(layer.input_shape[1:])
 
+
 def _count_flops_add_mul(layer):
   """count flops for layer Add or Multiply
 
@@ -152,6 +165,7 @@ def _count_flops_add_mul(layer):
   Multiply
   """
   return np.prod(layer.output_shape[1:])
+
 
 def format_flops(flops):
   """Formats the FLOPs into specific category depending on how large the value is
@@ -171,6 +185,7 @@ def format_flops(flops):
   else:
     return str(round(flops, 2)) + ' FLOPs'
 
+
 def get_map_types(upstride_type):
   """
   maps the upstride_type to dictionary map_type and returns the value
@@ -184,6 +199,7 @@ def get_map_types(upstride_type):
   }
   return map_type[upstride_type]
 
+
 def get_map_activations(activation_name):
   """
   maps the activation name to dictionary map_activation and returns the value
@@ -194,9 +210,9 @@ def get_map_activations(activation_name):
     "relu": _count_flops_relu,
     "hard_sigmoid": _count_flops_hard_sigmoid,
     "hard_swish": _count_flops_hard_swish,
-    "softmax": lambda x: 0 # skipping softmax and returning FLOPs as 0
   }
-  return map_activation[activation_name]
+  return map_activation.get(activation_name)
+
 
 def get_linear_layer_count_function(layer_class_name):
   """
@@ -209,6 +225,7 @@ def get_linear_layer_count_function(layer_class_name):
     "DepthwiseConv2D": _count_linear_layer
   }
   return map_linear_layer_to_count_fn.get(layer_class_name)
+
 
 def get_non_linear_count_function(layer_class_name):
   """
@@ -224,6 +241,7 @@ def get_non_linear_count_function(layer_class_name):
     "Multiply": _count_flops_add_mul
   }
   return map_non_linear_layer_to_count_fn.get(layer_class_name)
+
 
 def count_flops_efficient(model, upstride_type=-1):
   """computes the FLOPs for each layer in the given model and return the total FLOPs for the same
@@ -250,9 +268,12 @@ def count_flops_efficient(model, upstride_type=-1):
       flops += get_non_linear_count_function(layer_class_name)(layer) * num_of_blades 
     # Activation
     if isinstance(layer, tf.keras.layers.Activation):
-      flops += get_map_activations(layer.activation.__name__)(layer) * num_of_blades
+      layer_activation_name = layer.activation.__name__
+      if get_map_activations(layer_activation_name) is not None:
+        flops += get_map_activations(layer_activation_name)(layer) * num_of_blades
       
   return format_flops(int(flops))
+
 
 def count_flops(model):
   """
@@ -288,6 +309,7 @@ def information_density(model):
     return info_density
   return metric
 
+
 def net_score(model, alpha=2.0, beta=0.5, gamma=0.5):
   """
   Calculate custom evaluation metrics for energy efficient model by considering accuracy, computational cost and
@@ -308,6 +330,7 @@ def net_score(model, alpha=2.0, beta=0.5, gamma=0.5):
     score = 20 * log10(tf.math.pow(accuracy, alpha) / (tf.math.pow(total_params, beta) * tf.math.pow(total_MACs, gamma)))
     return score
   return metric
+
 
 # custom metrices  by extending tf.keras.metrics.Metric
 class InformationDensity(tf.keras.metrics.Metric):
@@ -333,6 +356,7 @@ class InformationDensity(tf.keras.metrics.Metric):
   def reset_states(self):
     # The state of the metric will be reset at the start of each epoch.
     self.info_density.assign(0.)
+
 
 class NetScore(tf.keras.metrics.Metric):
   """

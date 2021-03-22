@@ -21,109 +21,160 @@ def count_trainable_params(model):
       Total number ot trainable parameters
   """
   weights = model.trainable_weights
-  total_trainable_params = int(sum(np.prod(p.shape.as_list()) for p in object_identity.ObjectIdentitySet(weights)))
+  total_trainable_params = int(sum(np.prod(tf.size(p)) for p in object_identity.ObjectIdentitySet(weights)))
   return total_trainable_params
 
-def multiply_and_reduce(shape):
-  """Function calculates product between the shape (list) of the given layer and outputs a integer
-  eg: if shape is [10, 5, 3], the function is going to return ((10*5)*3).
+def _count_linear_layer(layer, num_of_blades):
+  """
+  Note: This function calculates the flops for any linear layer
 
   Args:
-      shape (list): list of n values, typically 3
+    layer (tf.keras.layer.Conv2D or DepthwiseConv2D or Dense): any linear layer from the keras model
+    num_of_blades: This value represent the number of blades we use for different upstride types.
 
   Returns:
-      int 
-  """
-  return int(reduce(lambda x, y: x*y, shape))
-
-def _count_linear_layer(layer, N):
-  """
-  Note: This calculates the FLOPs for the unoptimized implementation of any Algebra
+      int : total FLOPs for the given layer.
   """
   input_shape = layer.input_shape
   output_shape = layer.output_shape
+  output_group = np.prod(output_shape[1:])
+  class_name = layer.__class__.__name__
+
+  # we get output image size (H*W) (this is channel first/last dependent)
   if len(input_shape) == 4: # 2D Conv and DepthWise
-    if layer.data_format == "channels_first":
-      input_channels = input_shape[1]
-      output_channels, h, w, = output_shape[1:]
-    elif layer.data_format == "channels_last":
-      input_channels = input_shape[3]
-      h, w, output_channels = output_shape[1:]
-    w_h, w_w = layer.kernel_size
-    class_name = layer.__class__.__name__
-    if class_name == "DepthwiseConv2D": 
-      output_channels = 1
-    # grouping the products to input and outputs
-    input_group = w_h * w_w * input_channels
-    output_group = h * w * output_channels
+    # get the channel index
+    channel_index = 1 if layer.data_format == "channels_first" else -1
+    # get the input channels and output channels
+    input_channels = input_shape[channel_index]
+    output_channels = output_shape[channel_index]
+
+  # we get kernel size (this is layer dependant (Dense vs Conv))
+  # Depthwise layer output channels are same as input.
+  # It is a generalized case of group convolution where input channels are same as number of groups
+  # The expected output channel is output_channels / groups. 
+
+  # When DepwiseConv2D is substituted with Conv2D with groups = input_channels. The division operation on the groups are
+  # already applied to the input channels. eg: H x W x (c_in / groups).
+  if class_name == "DepthwiseConv2D": 
+    # In keras, the layer.output_shape for DepthwiseConv2D is (h * w * c_out), where c_out is same as c_in.
+    # Hence dividing by input_channels to get the correct FLOPs count
+    output_group /= input_channels 
+  if len(input_shape) == 4:
+    kernel_size = np.prod(layer.kernel_size)
+    input_group = np.prod([kernel_size, input_channels])
   elif len(input_shape) == 2: # Dense 
-    # grouping the products to input and outputs
-    input_group = input_shape[1] 
-    output_group = output_shape[1]
+    input_group = input_shape[1]  # (B, C)
   else:
     raise NotImplementedError("Flops for {layer.name} layer not implemented")
 
-  n_mul = (N**2) * (input_group * output_group)
-  n_add = (N*(N-1)) * (input_group * output_group)
+  # compute the product groups
+  n_mul = (num_of_blades**2) * (input_group * output_group)
+  # max(1, num_of_blades-1) to ensure the n_add doesn't becomes zero when num_of_blades = 1
+  n_add = num_of_blades * (max(1, num_of_blades-1)) * (input_group * output_group)
   
   flops = n_mul + n_add
 
-  if N == 1: 
-    flops *= 2 # n_add becomes zero for N = 1, hence multiplying to get the correct FLOPs
-
   if layer.use_bias:
-    flops += (output_group * N)
+    flops += output_group * num_of_blades
 
   return int(flops)
 
-def _count_flops_relu(layer, N):
+def _count_flops_relu(layer):
   """ Dev note : current tensorflow profiler say ReLU doesn't cost anything...
   """
   # 2 operations per component : compare and assign
-  return N * (multiply_and_reduce(layer.output_shape[1:]) * 2)
+  return np.prod(layer.output_shape[1:]) * 2
 
-def _count_flops_hard_sigmoid(layer, N):
-  relu = _count_flops_relu(layer, N=1)
-  add_divide = multiply_and_reduce(layer.output_shape[1:]) * 2
-  # relu + one addtion and one division
-  count = relu + add_divide
-  return N * count 
+def _count_flops_hard_sigmoid(layer):
+  """count FLOPs for hard_sigmoid activation
 
-def _count_flops_hard_swish(layer, N):
-  hard_sigmoid = _count_flops_hard_sigmoid(layer, N=1)
-  x = multiply_and_reduce(layer.output_shape[1:])
-  return N * (hard_sigmoid + x) # hard_sigmoid + 1 multiplication
+  Args:
+      layer (tf.keras.layers.Activation): Activation layer
 
-def _count_flops_maxpool2d(layer, N):
-  return N * (layer.pool_size[0] * layer.pool_size[1] * multiply_and_reduce(layer.output_shape[1:]))
-
-def _count_flops_global_avg_max_pooling(layer, N):
+  Returns:
+      int: FLOPs
   """
+  relu = _count_flops_relu(layer)
+  add_divide = np.prod(layer.output_shape[1:]) * 2
+  # relu + one addition and one division
+  return int(relu + add_divide)
+
+def _count_flops_hard_swish(layer):
+  """count FLOPs for hard_swish activation
+
+  Args:
+      layer (tf.keras.layers.Activation): Activation layer
+
+  Returns:
+      int: FLOPs
+  """
+  hard_sigmoid = _count_flops_hard_sigmoid(layer)
+  x = np.prod(layer.output_shape[1:])
+  return int(hard_sigmoid + x) # hard_sigmoid + 1 multiplication
+
+def _count_flops_maxpool2d(layer):
+  """count flops for layer max pool 2d
+
+  args:
+      layer (tf.keras.layers.MaxPooling2D): maxpooling layer
+
+  returns:
+      int: flops
+  """
+  return layer.pool_size[0] * layer.pool_size[1] * np.prod(layer.output_shape[1:])
+
+def _count_flops_global_avg_max_pooling(layer):
+  """count flops for layer global (MaxPooling2D or AvgPooling2D)
+
+  args:
+      layer (tf.keras.layers.GlobalMaxPooling2D or tf.keras.layers.GlobalAveragPooling2D)
+
+  returns:
+      int: flops
+ 
   This function can be used the count FLOPs for the below layers 
-  GlobalAveragePool2D
-  GlobalMaxpool2D
+  GlobalAveragePooling2D
+  GlobalMaxPooling2D
   """
-  return N * multiply_and_reduce(layer.input_shape[1:])
+  return np.prod(layer.input_shape[1:])
 
-def _count_flops_add_mul(layer, N):
-  """
+def _count_flops_add_mul(layer):
+  """count flops for layer Add or Multiply
+
+  args:
+      layer (tf.keras.layers.Add or tf.keras.layers.Multiply)
+
+  returns:
+      int: flops
+
   This function can be used the count FLOPs for the below layers 
   Add
   Multiply
   """
-  return N * multiply_and_reduce(layer.output_shape[1:])
+  return np.prod(layer.output_shape[1:])
 
 def format_flops(flops):
+  """Formats the FLOPs into specific category depending on how large the value is
+
+  Args:
+      flops (int): Over all FLOPs for the model
+
+  Returns:
+      [str]: FLOPs 2 decimal places
+  """
   if flops // 10e9 > 0:
-    return str(round(flops / 10.e9, 2)) + ' GFLOPs'
+    return str(round(flops / 10e9, 2)) + ' GFLOPs'
   elif flops // 10e6 > 0:
-    return str(round(flops / 10.e6, 2)) + ' MFLOPs'
+    return str(round(flops / 10e6, 2)) + ' MFLOPs'
   elif flops // 10e3 > 0:
-    return str(round(flops / 10.e3, 2)) + ' KFLOPs'
+    return str(round(flops / 10e3, 2)) + ' KFLOPs'
   else:
-    return str(round(flops), 2) + ' FLOPs'
+    return str(round(flops, 2)) + ' FLOPs'
 
 def get_map_types(upstride_type):
+  """
+  maps the upstride_type to dictionary map_type and returns the value
+  """
   map_type = {
     -1: 1,
      0: 1,
@@ -133,24 +184,38 @@ def get_map_types(upstride_type):
   }
   return map_type[upstride_type]
 
-def count_flops_efficient(model, upstride_type=-1):
-  N = get_map_types(upstride_type) 
-
-  flops = 0
-
-  # Not all the activations are present in keras layers. 
-  # TODO add new layers to the engine for both tensorflow and upstride.
+def get_map_activations(activation_name):
+  """
+  maps the activation name to dictionary map_activation and returns the value
+  Not all the activations are present in keras layers. 
+  Note user should have defined a function with same key name from the below dictionary
+  """
   map_activation = {
     "relu": _count_flops_relu,
     "hard_sigmoid": _count_flops_hard_sigmoid,
     "hard_swish": _count_flops_hard_swish,
-    "softmax": lambda x,y: 0 # TODO plan to skip 
+    "softmax": lambda x: 0 # skipping softmax and returning FLOPs as 0
   }
+  return map_activation[activation_name]
 
-  map_layer_to_count_fn = {
+def get_linear_layer_count_function(layer_class_name):
+  """
+  maps the layer class name to dictionary map_linear_layer_to_count_fn and returns the value
+  if key not found returns None
+  """
+  map_linear_layer_to_count_fn = {
     "Conv2D": _count_linear_layer,
-    "DepthwiseConv2D": _count_linear_layer,
     "Dense": _count_linear_layer,
+    "DepthwiseConv2D": _count_linear_layer
+  }
+  return map_linear_layer_to_count_fn.get(layer_class_name)
+
+def get_non_linear_count_function(layer_class_name):
+  """
+  maps the layer class name to dictionary map_non_linear_layer_to_count_fn and returns the value
+  if key not found returns None
+  """
+  map_non_linear_layer_to_count_fn = {
     "ReLU": _count_flops_relu,
     "MaxPooling2D": _count_flops_maxpool2d,
     "GlobalMaxPooling2D": _count_flops_global_avg_max_pooling,
@@ -158,23 +223,42 @@ def count_flops_efficient(model, upstride_type=-1):
     "Add": _count_flops_add_mul,
     "Multiply": _count_flops_add_mul
   }
+  return map_non_linear_layer_to_count_fn.get(layer_class_name)
+
+def count_flops_efficient(model, upstride_type=-1):
+  """computes the FLOPs for each layer in the given model and return the total FLOPs for the same
+
+  Args:
+      model (tf.keras.Model): Model 
+      upstride_type (int, optional): Used to get the number of blades. Defaults to -1.
+
+  Returns:
+      [str]: FLOPs for the give Model
+  """
+  # get the number of blades
+  num_of_blades = get_map_types(upstride_type) 
+  # initialize flops to 0
+  flops = 0
 
   for i, layer in enumerate(model.layers):
     layer_class_name = layer.__class__.__name__
-    if layer_class_name in map_layer_to_count_fn:
-      # print(i, layer)
-      flops += map_layer_to_count_fn[layer_class_name](layer, N) 
-    if type(layer) == tf.keras.layers.Activation:
-      flops += map_activation[layer.activation.__name__](layer, N)
-        
-  # return format_flops(int(flops))
-  return int(flops)
+    # linear layer
+    if get_linear_layer_count_function(layer_class_name) is not None:
+      flops += get_linear_layer_count_function(layer_class_name)(layer, num_of_blades) 
+    # non linear layer
+    if get_non_linear_count_function(layer_class_name) is not None:
+      flops += get_non_linear_count_function(layer_class_name)(layer) * num_of_blades 
+    # Activation
+    if isinstance(layer, tf.keras.layers.Activation):
+      flops += get_map_activations(layer.activation.__name__)(layer) * num_of_blades
+      
+  return format_flops(int(flops))
 
 def count_flops(model):
   """
   Count the number of FLOPS of tf.keras model
   Args
-      model: tf.keras model
+      model: tf.keras.Model
   return
       Total number of FLOPS
   """
@@ -249,7 +333,6 @@ class InformationDensity(tf.keras.metrics.Metric):
   def reset_states(self):
     # The state of the metric will be reset at the start of each epoch.
     self.info_density.assign(0.)
-
 
 class NetScore(tf.keras.metrics.Metric):
   """

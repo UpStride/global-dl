@@ -237,6 +237,32 @@ def get_non_linear_count_function(layer_class_name):
   }
   return map_non_linear_layer_to_count_fn.get(layer_class_name)
 
+def get_layers_not_included_in_flop_count(layers_set):
+  """compare layers that currently are not included in the FLOPs count
+  If any layer that is not part of the list layers_not_included_in_flop_count will be returned
+  If values in layers_set and layers_not_included_in_flop_count are matching empty list will be returned
+
+  Dev note: If you don't want a layer to be reported in the flop count it must be added to the below list
+
+  Args:
+      layers_set (set): set of keras layer class name or activation name
+
+  Returns: 
+      (list): Delta values between the 2 list or Empty list if values are matching
+  """
+  layers_not_included_in_flop_count = [
+    "InputLayer",
+    "BatchNormalization",
+    "Flatten",
+    "Concatenate",
+    "ZeroPadding2D",
+    "Reshape",
+    "Dropout",
+    "Upstride2TF",
+    "TF2Upstride",
+    "Lambda"
+  ]
+  return [name for name in layers_set if name not in layers_not_included_in_flop_count]
 
 def count_flops_efficient(model, upstride_type=-1):
   """computes the FLOPs for each layer in the given model and return the total FLOPs for the same
@@ -253,7 +279,7 @@ def count_flops_efficient(model, upstride_type=-1):
   # initialize flops to 0
   flops = 0
 
-  layers_not_counted_for_flops_calc = list()
+  layers_with_no_flop_count = list()
 
   for i, layer in enumerate(model.layers):
     layer_class_name = layer.__class__.__name__
@@ -268,10 +294,16 @@ def count_flops_efficient(model, upstride_type=-1):
       layer_activation_name = layer.activation.__name__
       if get_map_activations(layer_activation_name) is not None:
         flops += get_map_activations(layer_activation_name)(layer) * num_of_blades
+      else:
+        layers_with_no_flop_count.append(layer_activation_name)
     else:
-      layers_not_counted_for_flops_calc.append(layer_class_name)
-    
-  print(f"FLOPs not calculated for layer(s) {set(layers_not_counted_for_flops_calc)}")
+      layers_with_no_flop_count.append(layer_class_name)
+  
+  # get list of layers that are not included in the flop 
+  list_layers_with_no_flop = get_layers_not_included_in_flop_count(set(layers_with_no_flop_count))
+  # if list not empty print the missing layers
+  if list_layers_with_no_flop:
+    print(f"FLOPs not calculated for layer(s) {list_layers_with_no_flop}")
   return format_flops(int(flops))
 
 

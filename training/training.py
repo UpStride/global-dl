@@ -1,7 +1,7 @@
 import os
 from typing import Dict
 import tensorflow as tf
-from .optimizers import get_lr_scheduler, SyncLrWeightDecay
+from .optimizers import get_lr_scheduler
 
 
 def create_dir(path: str):
@@ -117,8 +117,6 @@ def get_callbacks(config, log_dir):
     callbacks.append(
         get_lr_scheduler(config['optimizer']['lr'], config['num_epochs'], config['optimizer']['lr_decay_strategy']['lr_params'], log_dir)
     )
-  if config['optimizer']['name'] == "adamw":
-    callbacks.append(SyncLrWeightDecay(log_dir=log_dir))
   return callbacks
 
 

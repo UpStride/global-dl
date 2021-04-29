@@ -3,7 +3,7 @@ from typing import List
 import os
 import tensorflow as tf
 from tensorflow.keras.optimizers import Adadelta, Adagrad, Adam, Adamax, SGD, Nadam, RMSprop
-from tensorflow_addons.optimizers import Lookahead, RectifiedAdam, AdamW
+from tensorflow_addons.optimizers import Lookahead, RectifiedAdam
 from tensorflow.keras.callbacks import LearningRateScheduler, ReduceLROnPlateau, Callback
 import matplotlib.pyplot as plt
 import numpy as np
@@ -21,7 +21,6 @@ optimizer_list = [
     "nadam",
     "rmsprop",
     "radam",
-    "adamw",
 ]
 
 LEARNING_SCHEDULE_LIST = [
@@ -45,8 +44,7 @@ arguments = [
     [str, 'name', 'sgd_nesterov', 'optimized to be used', lambda x: x.lower() in optimizer_list],
     [float, 'momentum', 0.9, 'used when optimizer name is specified as sgd_momentum'],
     [float, "lr", 0.0001, 'initial learning rate', lambda x: x > 0],
-    [float, "weight_decay", 0.0001, 'weight of l2 regularization', lambda x: x >= 0],
-    [float, "weight_decay_adamw", 0.00, 'true weight decay used in adamW', lambda x: x >= 0],
+    [float, "weight_decay", 0.0001, 'weight of l2 regularization', lambda x: x > 0],
     [float, "clipnorm", 0, 'if different than zero then use gradient norm clipping'],
     [float, "clipvalue", 0, 'if different than zero then use gradient value clipping'],
     [bool, "lookahead", False, "whether to use lookahead with the optimizer"],
@@ -184,7 +182,7 @@ class CosineAnnealer:
 class FlatAndAnnealScheduler(GenericScheduler):
   """
   Callback that follows the flat and anneal learning rate policy.
-  The learning rate is constant during the first phase. I then decreases using cosine annealing during the second phase.
+  The learning rate is constant during the first phase. It then decreases using cosine annealing during the second phase.
   """
   def __init__(self, lr, steps, phase_1_pct=0.8, log_dir=None):
     super(FlatAndAnnealScheduler, self).__init__()
@@ -201,10 +199,6 @@ class FlatAndAnnealScheduler(GenericScheduler):
 
     self.log_dir = log_dir
     self.file_writer = tf.summary.create_file_writer(os.path.join(self.log_dir, "metrics"))
-
-  def on_train_begin(self, logs=None):
-    self.step = 0
-    self.set_lr(self.flat_lr)
 
   def on_train_batch_begin(self, batch, logs=None):
     lr = self.get_lr()
@@ -258,16 +252,8 @@ class OneCycleScheduler(GenericScheduler):
 
     self.lrs = []
     self.moms = []
-
     self.log_dir = log_dir
     self.file_writer = tf.summary.create_file_writer(os.path.join(self.log_dir, "metrics"))
-
-  def on_train_begin(self, logs=None):
-    self.phase = 0
-    self.step = 0
-
-    self.set_lr(self.lr_schedule().start)
-    self.set_momentum(self.mom_schedule().start)
 
   def on_train_batch_begin(self, batch, logs=None):
     logs = logs or {}
@@ -544,35 +530,6 @@ def get_lr_scheduler(lr: float, total_epochs: int, lr_params: dict, log_dir=None
   return get_lr[lr_schedule_name]
 
 
-class SyncLrWeightDecay(Callback):
-  def __init__(self, log_dir=None, **kwargs):
-    super().__init__(**kwargs)
-    self.log_dir = log_dir
-    if log_dir:
-      self.file_writer = tf.summary.create_file_writer(os.path.join(self.log_dir, "metrics"))
-    self.starting_lr = None
-    self.starting_wd = None
-    self.step = 0
-
-  def on_train_begin(self, logs=None):
-    self.starting_lr = tf.keras.backend.get_value(self.model.optimizer.lr)
-    self.starting_wd = tf.keras.backend.get_value(self.model.optimizer.weight_decay)
-
-  def on_train_batch_begin(self, batch, logs=None):
-    if self.log_dir is None:
-      return
-    wd = tf.keras.backend.get_value(self.model.optimizer.weight_decay)
-    with self.file_writer.as_default():
-      tf.summary.scalar("weight decay by steps", data=wd, step=self.step)
-
-  def on_batch_end(self, batch, logs=None):
-    current_lr = tf.keras.backend.get_value(self.model.optimizer.lr)
-    ratio = current_lr / self.starting_lr
-    new_wd = self.starting_wd * ratio
-    tf.keras.backend.set_value(self.model.optimizer.weight_decay, new_wd)
-    self.step += 1
-
-
 def get_optimizer(optimizer_param: dict):
   optimizer_name = optimizer_param['name'].lower()
   lr = optimizer_param['lr']
@@ -595,16 +552,12 @@ def get_optimizer(optimizer_param: dict):
       'nadam': Nadam(lr, **kwargs),
       'rmsprop': RMSprop(lr, **kwargs),
       'radam': RectifiedAdam(lr, **kwargs),
-      'adamw': AdamW(learning_rate=lr, weight_decay=optimizer_param["weight_decay_adamw"])
   }
-
-  if optimizer_name == 'adamw' and optimizer_param["weight_decay_adamw"] > 0 and optimizer_param["weight_decay"] > 0:
-    raise ValueError("Weight regularization is set twice.\nOnce with adamW and \'weight_decay_adamw\', and a second time with \'weight_decay\' used in l2 regularization. "
-                     "If you want to use adamW with \'weight_decay_adamw\', set \'weight_decay\' to 0")
 
   optimizer = optimizer_dict[optimizer_name]
 
   if optimizer_param['lookahead']:
     optimizer = Lookahead(optimizer=optimizer, sync_period=optimizer_param['sync_period'])
+
 
   return optimizer

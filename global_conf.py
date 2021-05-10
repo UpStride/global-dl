@@ -10,6 +10,8 @@ arguments = [
     [bool, "xla", False, "In some cases, using xla can speed up training or inference"],
     [bool, "full_gpu_memory", False, "By default, the model will take only what it needs as GPU memory. By turning on this option, it will use the whole GPU memory"],
     [bool, "mixed_precision", False, 'To train with mixed precision'],
+    # to use "mirrored" strategy with docker make sure you have enough shared memory
+    # you can set the shared memory with the --shm-size option of docker run
     [str, "strategy", "oneDevice", 'tensorflow distribute strategy, can be oneDevice or mirrored', lambda x: x in STRATEGIES],
 ]
 
